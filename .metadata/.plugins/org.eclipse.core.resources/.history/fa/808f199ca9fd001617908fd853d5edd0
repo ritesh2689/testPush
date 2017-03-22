@@ -1,0 +1,45 @@
+import org.openqa.selenium.Alert;
+import org.openqa.selenium.By;
+import org.openqa.selenium.WebDriver;
+import org.openqa.selenium.WebElement;
+import org.openqa.selenium.chrome.ChromeDriver;
+import org.openqa.selenium.support.ui.ExpectedConditions;
+import org.openqa.selenium.support.ui.WebDriverWait;
+
+public class AlertDemo {
+	public static void main(String args[]) {
+		System.setProperty("webdriver.chrome.driver", "E://chromedriver.exe");
+		WebDriver driver = new ChromeDriver();
+		driver.get("http://demo.guru99.com/V4/");
+
+		WebElement userID = driver.findElement(By
+				.xpath("//*[@type='text' and @name='uid']"));
+		userID.clear();
+		userID.sendKeys("mngr68159");
+
+		WebElement password = driver.findElement(By
+				.xpath("//*[@type='password' and @name='password']"));
+		password.clear();
+		password.sendKeys("ujEtude");
+
+		// login button
+		// btnLogin
+		WebElement loginButton = driver.findElement(By
+				.xpath("//*[@type='submit' and @name='btnLogin']"));
+
+		loginButton.click();
+
+		WebElement deleteCustomerNav = driver.findElement(By
+				.xpath("//div/div/ul/li[4]"));
+		deleteCustomerNav.click();
+		
+		WebElement submit = driver.findElement(By
+				.xpath("//*[@type='submit' and @value='submit']"));
+		
+		submit.click();
+		
+		//Alert handling
+		Alert alert = driver.switchTo().alert();
+		String alertMessage = driver.switchTo().alert().getText();
+	}
+}

@@ -1,0 +1,29 @@
+package testngPackage;
+
+import org.openqa.selenium.WebDriver;
+import org.openqa.selenium.firefox.FirefoxDriver;
+import org.testng.Assert;
+import org.testng.annotations.BeforeClass;
+import org.testng.annotations.Test;
+
+public class FirstTestNGTest {
+	public String baseUrl = null;
+	public WebDriver driver = null;
+	
+	@BeforeClass
+	public void setup()
+	{
+	public String baseUrl= "http://www.google.com";
+	public WebDriver driver = new FirefoxDriver();
+	}
+	
+  @Test
+  public void verifyHomePageTitle() {
+	  
+	  driver.get(baseUrl);
+	  String expectedTitle = "";
+	  String actualTitle = driver.getTitle();
+	  Assert.assertEquals(actualTitle, expectedTitle);
+	  driver.quit();
+  }
+}

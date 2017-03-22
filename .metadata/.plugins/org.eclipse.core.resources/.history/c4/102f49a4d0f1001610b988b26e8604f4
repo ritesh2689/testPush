@@ -1,0 +1,1410 @@
+package com.snapdeal.payments.mob.EntityMigration;
+
+import java.util.Calendar;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+import org.apache.log4j.Logger;
+import org.testng.Assert;
+import org.testng.annotations.Test;
+
+import com.snapdeal.automation.fwk.testdata.generator.TestDataGenerator;
+import com.snapdeal.mob.dto.BankAccountDetailsDTO;
+import com.snapdeal.mob.dto.TDRDetailsDTO;
+import com.snapdeal.mob.enums.BankStatus;
+import com.snapdeal.mob.enums.IntegrationMode;
+import com.snapdeal.mob.enums.MerchantStatus;
+import com.snapdeal.mob.exception.ServiceException;
+import com.snapdeal.mob.response.CreateMerchantResponse;
+import com.snapdeal.mob.response.UpdateEntityLobResponse;
+import com.snapdeal.mob.response.UpdateMerchantConfigurationsResponse;
+import com.snapdeal.mob.response.UpdateMerchantDetailsResponse;
+import com.snapdeal.mob.response.UpdateMerchantStatusResponse;
+import com.snapdeal.payments.disbursement.model.DisbursementType;
+import com.snapdeal.payments.disbursement.model.GetMerchantDisbursementDetailsResponse;
+import com.snapdeal.payments.disbursement.model.GetMerchantLatestPreferenceResponse;
+import com.snapdeal.payments.disbursement.model.MerchantPreference;
+import com.snapdeal.payments.mob.base.DBQuery;
+import com.snapdeal.payments.mob.base.MOBCommons;
+import com.snapdeal.payments.mob.base.MOBData;
+import com.snapdeal.payments.mob.base.MOBTestBase;
+import com.snapdeal.payments.mob.base.MobUtils;
+import com.snapdeal.payments.mob.base.PaymentMethodLOBMapping;
+import com.snapdeal.payments.mob.utils.AggregatorUtils;
+import com.snapdeal.payments.mob.utils.DisbursementUtils;
+import com.snapdeal.payments.mob.utils.POSServiceUtils;
+import com.snapdeal.payments.mob.utils.PayablesUtils;
+import com.snapdeal.payments.mob.utils.RoleManagementUtils;
+import com.snapdeal.payments.mob.utils.SDMoneyServiceUtils;
+import com.snapdeal.payments.payables.entity.FeeDetail;
+import com.snapdeal.payments.sdmoney.service.model.CorpAccount;
+import com.snapdeal.payments.sdmoney.service.model.GetSDMoneyAccountResponse;
+import com.snapdeal.posservice.model.response.GetMerchantDetailsByMerchantIdResponse;
+
+import bsh.ParseException;
+
+public class MerchantOnboardingTests extends MOBTestBase{
+	
+	public static final Logger log = Logger.getLogger(MerchantOnboardingTests.class);
+
+	MOBCommons mobCommons = new MOBCommons();
+	TestDataGenerator tdgen = new TestDataGenerator();
+	RoleManagementUtils roleMgmtUtils = new RoleManagementUtils();
+	SDMoneyServiceUtils sdMoneyServiceUtils = new SDMoneyServiceUtils();
+	AggregatorUtils aggregatorUtils = new AggregatorUtils();
+	POSServiceUtils posServiceUtils = new POSServiceUtils();
+	DisbursementUtils deUtils=new DisbursementUtils();
+	PayablesUtils payUtils = new PayablesUtils();
+	MobUtils mobUtils = new MobUtils();
+	Map<String, Set<String>> confList;
+	UpdateEntityLobResponse updateEntityLobResponse = null;
+	DisbursementType walletDisbursementType=DisbursementType.WalletCorpMerchant;
+	DisbursementType payablesFcptlMerchantDisbursementType=DisbursementType.PayablesFcptlMerchant;
+	DisbursementType payablesMerchantDisbursementType=DisbursementType.PayablesMerchant;
+	private final String expectedLobInAggregator = "{\"LOB1\":\"FCPTLPG\",\"LOB2\":\"FCPTLWallet\"}";
+
+	
+	public void setupCreateMerchant(IntegrationMode integrationMode) throws ServiceException, InterruptedException {
+		mobData = new MOBData();
+		mobData.setDefaultMerchantOnboardingRequestData();
+		mobData.setIntegrationMode(integrationMode.getIntegrationMode());
+		String merchantId = null;
+		CreateMerchantResponse createMerchantResponse = null;
+		
+		if (true) {
+			//String token = roleMgmtUtils.getTokenFromRoleManagement();
+			//mobData.setToken(token);
+		}
+		if (integrationMode.equals(IntegrationMode.FCPLUS)) {
+			merchantId = mobUtils.createUpdatedMicroMerchant(mobData);
+			mobData.setImsId(merchantId);
+		} else if (integrationMode.equals(IntegrationMode.ONLINE)) {
+			createMerchantResponse = mobCommons.createMerchant(mobData);
+			merchantId = createMerchantResponse.getMerchantId();
+		} else if (integrationMode.equals(IntegrationMode.OFFLINE)) {
+			createMerchantResponse = mobCommons.createMerchant(mobData);
+			merchantId = createMerchantResponse.getMerchantId();
+		}
+	
+		mobData.setMerchantId(merchantId);
+	}
+	
+	public void setPaymentMethod(String paymentMethod) throws InterruptedException{
+		try
+		{
+			confList = new HashMap<String, Set<String>>();
+
+			Set<String> s1 = new HashSet<String>();
+			s1.add(paymentMethod);
+			confList.put("Payment Method", s1);
+			mobData.setConfList(confList);			
+		
+			UpdateMerchantConfigurationsResponse updateMerchantConfigurationsResponse = null;
+			updateMerchantConfigurationsResponse = mobCommons.getUpdateMerchantConfigurationsResponse(mobData);
+			Assert.assertNotNull(updateMerchantConfigurationsResponse);
+			Assert.assertTrue(updateMerchantConfigurationsResponse.isSuccess());
+			Thread.sleep(2000);
+		}
+		catch (ServiceException e)
+		{
+			log.info("\n\nError Code-->"+e.getErrCode()+"\nError Msg-->"+e.getErrMsg());e.printStackTrace();
+			Assert.fail();
+		}
+	}
+	
+	void verifyPaymentMethodsInAggregator(String expectedPaymentMethods)
+	{
+		DBQuery dbQuery = new DBQuery();
+		try {
+			String[] expectedpaymentMethodsArray = expectedPaymentMethods.split(",");
+			int size = expectedpaymentMethodsArray.length;
+			String actualPaymentMethods = dbQuery.getAggregatorData(mobData.getMerchantId(), "payment_method_enum");
+			String[] actualPaymentMethodsArray = actualPaymentMethods.split(",");
+			Thread.sleep(1000);
+			for(int i=0;i<size;i++)
+				Assert.assertEquals(actualPaymentMethodsArray[i].toLowerCase(), expectedpaymentMethodsArray[i].toLowerCase());
+		} catch (Exception e) {
+			e.printStackTrace();
+			Assert.fail();
+		}
+	}
+
+	void verifyBothLobInAggregatorWithFlagDisabled()
+	{
+		DBQuery dbQuery = new DBQuery();
+		try {
+			String aggregatorMerchantLob = dbQuery.getAggregatorMerchantLob(mobData.getMerchantId());
+			Thread.sleep(1000);
+			Assert.assertEquals(aggregatorMerchantLob, expectedLobInAggregator);
+			String aggregatorEntityFlag = dbQuery.getAggregatorData(mobData.getMerchantId(), "is_entity_enable");
+			Thread.sleep(3000);
+			Assert.assertEquals(aggregatorEntityFlag, "0");
+		} catch (Exception e) {
+			e.printStackTrace();
+			Assert.fail();
+		}
+	}
+	
+	void verifyMerchantNameInAggregator()
+	{
+		DBQuery dbQuery = new DBQuery();
+		try {
+			String aggregatorMerchantName = dbQuery.getAggregatorData(mobData.getMerchantId(), "merchant_name");
+			Thread.sleep(1000);
+			Assert.assertEquals(aggregatorMerchantName, mobData.getMerchantName());
+		} catch (Exception e) {
+			e.printStackTrace();
+			Assert.fail();
+		}
+	}
+	
+	void verifyTransactionAndRefundActiveInAggregator(String expectedTransactionActive, String exxpectedRefundActive)
+	{
+		DBQuery dbQuery = new DBQuery();
+		try {
+			String isaggregatorTransactionActive = dbQuery.getAggregatorData(mobData.getMerchantId(), "is_transactions_active");
+			String isaggregatorRefundActive = dbQuery.getAggregatorData(mobData.getMerchantId(), "is_refunds_active");
+			Thread.sleep(1000);
+			Assert.assertEquals(isaggregatorTransactionActive, expectedTransactionActive);
+			Assert.assertEquals(isaggregatorRefundActive, exxpectedRefundActive);
+		} catch (Exception e) {
+			e.printStackTrace();
+			Assert.fail();
+		}
+	}
+	
+	void verifyBothLobInPayables() throws InterruptedException
+	{
+		String PayablesAccountLob1 = payUtils.getPayableAccountIdByMerchantId(mobData.getMerchantId(), PaymentMethodLOBMapping.LOB1.getLob());
+		String PayablesAccountLob2 = payUtils.getPayableAccountIdByMerchantId(mobData.getMerchantId(), PaymentMethodLOBMapping.LOB2.getLob());
+		Assert.assertNotNull(PayablesAccountLob1);
+		Assert.assertNotNull(PayablesAccountLob2);
+		List<FeeDetail> feeDetailLob1 = payUtils.getFeeDetail(mobData.getMerchantId(), PaymentMethodLOBMapping.LOB1.getLob());
+		List<FeeDetail> feeDetailLob2 = payUtils.getFeeDetail(mobData.getMerchantId(), PaymentMethodLOBMapping.LOB2.getLob());
+		int latestFeeVersionlob1 = feeDetailLob1.size()-1;
+		int latestFeeVersionlob2 = feeDetailLob2.size()-1;
+		Assert.assertEquals(feeDetailLob1.get(latestFeeVersionlob1).getFeeStructure().get(0).getValue().toString(), mobData.getTdrDetailsDTO().getMerchantFeeValue());
+		Assert.assertEquals(feeDetailLob1.get(latestFeeVersionlob1).getFeeStructure().get(1).getValue().toString(), mobData.getTdrDetailsDTO().getFixedFeeValue());
+		
+		Assert.assertEquals(feeDetailLob2.get(latestFeeVersionlob2).getFeeStructure().get(0).getValue().toString(), mobData.getTdrDetailsDTO().getMerchantFeeValue());
+		Assert.assertEquals(feeDetailLob2.get(latestFeeVersionlob2).getFeeStructure().get(1).getValue().toString(), mobData.getTdrDetailsDTO().getFixedFeeValue());
+	}
+	
+	void verifyMerchantinWallet() throws com.snapdeal.fcNotifier.exception.ServiceException
+	{
+		//GetSDMoneyAccountResponse GetMerchantDetailsResponse= sdMoneyServiceUtils.getSDMoneyAccount(mobData);
+		List<CorpAccount> list= sdMoneyServiceUtils.getCorpAccountsForEntity(mobData);
+		Assert.assertNotNull(list);
+	}
+	
+	void verifyMerchantInOPS() throws Exception
+	{
+		GetMerchantDetailsByMerchantIdResponse getMerchantDetailsByMerchantIdResponse = posServiceUtils.getMerchantDetailsByMerchantId(mobData);
+		Assert.assertEquals(getMerchantDetailsByMerchantIdResponse.getMerchantId(), mobData.getMerchantId());
+		Assert.assertEquals(getMerchantDetailsByMerchantIdResponse.getMobMerchantId(), mobData.getMerchantId());
+	}
+		
+	void verifySingleLobInPayables() throws InterruptedException
+	{
+		String PayablesAccountLob2 = payUtils.getPayableAccountIdByMerchantId(mobData.getMerchantId(), PaymentMethodLOBMapping.LOB2.getLob());
+		Assert.assertNotNull(PayablesAccountLob2);
+		List<FeeDetail> feeDetailLob2 = payUtils.getFeeDetail(mobData.getMerchantId(), PaymentMethodLOBMapping.LOB2.getLob());
+		int latestFeeVersion = feeDetailLob2.size()-1;
+		Assert.assertEquals(feeDetailLob2.get(latestFeeVersion).getFeeStructure().get(0).getValue().toString(), mobData.getBusinessInformationDTO().getTdrDetailsDTO().getMerchantFeeValue());
+		Assert.assertEquals(feeDetailLob2.get(latestFeeVersion).getFeeStructure().get(1).getValue().toString(), mobData.getBusinessInformationDTO().getTdrDetailsDTO().getFixedFeeValue());
+	}
+	
+	void verifyBothLobInPayablesWithoutFeeDetails() throws InterruptedException
+	{
+		String PayablesAccountLob1 = payUtils.getPayableAccountIdByMerchantId(mobData.getMerchantId(), PaymentMethodLOBMapping.LOB1.getLob());
+		String PayablesAccountLob2 = payUtils.getPayableAccountIdByMerchantId(mobData.getMerchantId(), PaymentMethodLOBMapping.LOB2.getLob());
+		Assert.assertNotNull(PayablesAccountLob1);
+		Assert.assertNotNull(PayablesAccountLob2);
+		List<FeeDetail> feeDetailLob1 = payUtils.getFeeDetail(mobData.getMerchantId(), PaymentMethodLOBMapping.LOB1.getLob());
+		List<FeeDetail> feeDetailLob2 = payUtils.getFeeDetail(mobData.getMerchantId(), PaymentMethodLOBMapping.LOB2.getLob());
+		Assert.assertTrue(feeDetailLob1.isEmpty());
+		Assert.assertTrue(feeDetailLob2.isEmpty());
+	}
+	
+	void verifySingleLobInPayablesWithoutFeeDetails() throws InterruptedException
+	{
+		String PayablesAccountLob2 = payUtils.getPayableAccountIdByMerchantId(mobData.getMerchantId(), PaymentMethodLOBMapping.LOB2.getLob());
+		Assert.assertNotNull(PayablesAccountLob2);
+		List<FeeDetail> feeDetailLob2 = payUtils.getFeeDetail(mobData.getMerchantId(), PaymentMethodLOBMapping.LOB2.getLob());
+		Assert.assertTrue(feeDetailLob2.isEmpty());
+	}
+
+	void verifyLobInDEWithoutBankDetails()
+	{
+		GetMerchantDisbursementDetailsResponse getMerchantDisbursementDetailsResponse=
+				deUtils.getMerchantDisbursementDetails(mobData.getMerchantId());
+		List<MerchantPreference> merchantPreferences = getMerchantDisbursementDetailsResponse.getMerchantPreferences();
+		Assert.assertEquals(merchantPreferences.size(),1);
+		Assert.assertEquals(merchantPreferences.get(0).getMerchantDisbursementId(), mobData.getMerchantId());
+		Assert.assertEquals(merchantPreferences.get(0).getDisbursementType(), walletDisbursementType);
+		GetMerchantLatestPreferenceResponse getMerchantLatestPreferenceResponse = deUtils.getPreferenceOrder(walletDisbursementType, merchantPreferences.get(0).getMerchantDisbursementId());
+		Assert.assertNotNull(getMerchantLatestPreferenceResponse);
+	}
+	
+	void verifySingleLobInDE(boolean isSettlementEnabled)
+	{
+		GetMerchantDisbursementDetailsResponse getMerchantDisbursementDetailsResponse=
+				deUtils.getMerchantDisbursementDetails(mobData.getMerchantId());
+		List<MerchantPreference> merchantPreferencesList = getMerchantDisbursementDetailsResponse.getMerchantPreferences();
+		Assert.assertEquals(merchantPreferencesList.size(), 2);
+		Iterator<MerchantPreference> merchantPreferencesIterator = merchantPreferencesList.iterator();
+		String payablesFcptlMerchantDisbursementId = null;
+		String walletDisbursementId = null;
+		while(merchantPreferencesIterator.hasNext())
+		{
+			MerchantPreference merchantPreference = merchantPreferencesIterator.next();
+			log.info("\n\n\nMerchant Details--->"+merchantPreference);
+			if(merchantPreference.getDisbursementType().equals(payablesFcptlMerchantDisbursementType))
+			{
+				payablesFcptlMerchantDisbursementId = merchantPreference.getMerchantDisbursementId();
+				Assert.assertNotNull(payablesFcptlMerchantDisbursementId);
+			}
+			else if(merchantPreference.getDisbursementType().equals(walletDisbursementType))
+			{
+				walletDisbursementId = merchantPreference.getMerchantDisbursementId();
+				Assert.assertEquals(walletDisbursementId, mobData.getMerchantId());
+			}
+		}
+		//verify bank details
+		Assert.assertNotNull(payablesFcptlMerchantDisbursementId);
+		Assert.assertNotNull(walletDisbursementId);
+		GetMerchantLatestPreferenceResponse getMerchantLatestPreferenceResponseFcptlPayables = deUtils.getPreferenceOrder(payablesFcptlMerchantDisbursementType, payablesFcptlMerchantDisbursementId);
+		GetMerchantLatestPreferenceResponse getMerchantLatestPreferenceResponseWallet = deUtils.getPreferenceOrder(walletDisbursementType, walletDisbursementId);
+		
+		Assert.assertNotNull(getMerchantLatestPreferenceResponseWallet);
+		Assert.assertEquals(getMerchantLatestPreferenceResponseWallet.getEnable(), new Boolean(isSettlementEnabled));
+		assertDEBankDetails(getMerchantLatestPreferenceResponseFcptlPayables, isSettlementEnabled);
+	}
+	
+	void verifyBothLobInDE(boolean isSettlementEnabled)
+	{
+		GetMerchantDisbursementDetailsResponse getMerchantDisbursementDetailsResponse=
+				deUtils.getMerchantDisbursementDetails(mobData.getMerchantId());
+		List<MerchantPreference> merchantPreferencesList = getMerchantDisbursementDetailsResponse.getMerchantPreferences();
+		Assert.assertEquals(merchantPreferencesList.size(), 3);
+		Iterator<MerchantPreference> merchantPreferencesIterator = merchantPreferencesList.iterator();
+		String payablesFcptlMerchantDisbursementId = null;
+		String payablesMerchantDisbursementId= null;
+		String walletDisbursementId = null;
+		while(merchantPreferencesIterator.hasNext())
+		{
+			MerchantPreference merchantPreference = merchantPreferencesIterator.next();
+			log.info("\n\n\nMerchant Details--->"+merchantPreference);
+			if(merchantPreference.getDisbursementType().equals(payablesFcptlMerchantDisbursementType))
+			{
+				payablesFcptlMerchantDisbursementId = merchantPreference.getMerchantDisbursementId();
+				Assert.assertNotNull(payablesFcptlMerchantDisbursementId);
+			}
+			else if(merchantPreference.getDisbursementType().equals(payablesMerchantDisbursementType))
+			{
+				payablesMerchantDisbursementId = merchantPreference.getMerchantDisbursementId();
+				Assert.assertNotNull(payablesMerchantDisbursementId);
+			}
+			else if(merchantPreference.getDisbursementType().equals(walletDisbursementType))
+			{
+				walletDisbursementId = merchantPreference.getMerchantDisbursementId();
+				Assert.assertEquals(walletDisbursementId, mobData.getMerchantId());
+			}
+		}
+		//verify bank details
+		Assert.assertNotNull(payablesFcptlMerchantDisbursementId);
+		Assert.assertNotNull(payablesMerchantDisbursementId);
+		Assert.assertNotNull(walletDisbursementId);
+		GetMerchantLatestPreferenceResponse getMerchantLatestPreferenceResponseFcptlPayables = deUtils.getPreferenceOrder(payablesFcptlMerchantDisbursementType, payablesFcptlMerchantDisbursementId);
+		GetMerchantLatestPreferenceResponse getMerchantLatestPreferenceResponsePayables = deUtils.getPreferenceOrder(payablesMerchantDisbursementType, payablesMerchantDisbursementId);
+		GetMerchantLatestPreferenceResponse getMerchantLatestPreferenceResponseWallet = deUtils.getPreferenceOrder(walletDisbursementType, walletDisbursementId);
+		
+		Assert.assertNotNull(getMerchantLatestPreferenceResponseWallet);
+		Assert.assertEquals(getMerchantLatestPreferenceResponseWallet.getEnable(), new Boolean(isSettlementEnabled));
+		assertDEBankDetails(getMerchantLatestPreferenceResponsePayables, isSettlementEnabled);
+		assertDEBankDetails(getMerchantLatestPreferenceResponseFcptlPayables, isSettlementEnabled);
+	}
+	
+	void assertDEBankDetails(GetMerchantLatestPreferenceResponse getMerchantLatestPreferenceResponse, boolean isSettlementEnabled)
+	{
+		Assert.assertEquals(getMerchantLatestPreferenceResponse.getBankName(), mobData.getBankAccountDetailsDTO().getBankName());
+		Assert.assertEquals(getMerchantLatestPreferenceResponse.getAccountNumber(), mobData.getBankAccountDetailsDTO().getAccountNumber());
+		Assert.assertEquals(getMerchantLatestPreferenceResponse.getIfscCode(), mobData.getBankAccountDetailsDTO().getIfsccode());
+		Assert.assertEquals(getMerchantLatestPreferenceResponse.getShortName(), mobData.getBankAccountDetailsDTO().getAccountHolderName());
+		Assert.assertEquals(getMerchantLatestPreferenceResponse.getEnable(), new Boolean(isSettlementEnabled));
+		Assert.assertEquals(new Integer(getMerchantLatestPreferenceResponse.getDisburseDifferencePeriod()), mobData.getBankAccountDetailsDTO().getDisburseDifferencePeriod());
+	}
+	
+	@Test
+	public void createOnlineMerchantDefault() throws InterruptedException {
+		try {
+			setupCreateMerchant(IntegrationMode.ONLINE);
+			verifyPaymentMethodsInAggregator("PG,Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifyBothLobInPayablesWithoutFeeDetails();
+			verifyLobInDEWithoutBankDetails();
+			
+		} catch (Exception e) {
+			e.printStackTrace();
+			Assert.fail();
+		}
+	}
+
+	@Test
+	public void createOnlineMerchantUpdateBasicInfo() throws InterruptedException {
+		try {
+			setupCreateMerchant(IntegrationMode.ONLINE);
+			mobData.setBankAccountDetailsDTO(null);
+			mobData.getBusinessInformationDTO().setTdrDetailsDTO(null);
+			mobCommons.updateMerchantDetails(mobData);
+
+			Thread.sleep(2000);verifyMerchantinWallet();
+			verifyPaymentMethodsInAggregator("PG,Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifyBothLobInPayablesWithoutFeeDetails();
+			verifyLobInDEWithoutBankDetails();
+			
+		} catch (Exception e) {
+			e.printStackTrace();
+			Assert.fail();
+		}
+	}
+	
+	@Test
+	public void createOnlineMerchantUpdatePGInfo() throws InterruptedException {
+		try {
+			setupCreateMerchant(IntegrationMode.ONLINE);
+			mobData.setBankAccountDetailsDTO(null);
+			mobData.getBusinessInformationDTO().setTdrDetailsDTO(null);
+			mobCommons.updateMerchantDetails(mobData);
+			mobCommons.updatePGDetail(mobData);
+
+			//verify pg details in aggregator
+			Thread.sleep(2000);verifyMerchantinWallet();
+			verifyPaymentMethodsInAggregator("PG,Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifyBothLobInPayablesWithoutFeeDetails();
+			verifyLobInDEWithoutBankDetails();
+			
+		} catch (Exception e) {
+			e.printStackTrace();
+			Assert.fail();
+		}
+	}
+	
+	@Test
+	public void createOnlineMerchantWithBankInfo() throws InterruptedException {
+		try {
+			setupCreateMerchant(IntegrationMode.ONLINE);
+			mobData.getBusinessInformationDTO().setTdrDetailsDTO(null);
+			mobCommons.updateMerchantDetails(mobData);
+			mobCommons.updatePGDetail(mobData);
+
+			Thread.sleep(2000);verifyMerchantinWallet();
+			verifyPaymentMethodsInAggregator("PG,Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifyBothLobInPayablesWithoutFeeDetails();
+			verifyBothLobInDE(false);
+			
+		} catch (Exception e) {
+			e.printStackTrace();
+			Assert.fail();
+		}
+	}
+	
+	@Test
+	public void createOnlineMerchantWithFeeInfo() throws InterruptedException {
+		try {
+			setupCreateMerchant(IntegrationMode.ONLINE);
+			mobCommons.updateMerchantDetails(mobData);
+			mobCommons.updatePGDetail(mobData);
+
+			Thread.sleep(2000);verifyMerchantinWallet();
+			verifyPaymentMethodsInAggregator("PG,Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifyBothLobInPayables();
+			verifyBothLobInDE(false);
+			
+		} catch (Exception e) {
+			e.printStackTrace();
+			Assert.fail();
+		}
+	}
+	
+// Offline Tests
+	@Test
+	public void createOfflineMerchantDefault() throws InterruptedException {
+		try {
+			setupCreateMerchant(IntegrationMode.OFFLINE);
+
+			verifyMerchantInOPS();
+			verifyBothLobInPayablesWithoutFeeDetails();
+			verifyLobInDEWithoutBankDetails();
+			
+		} catch (Exception e) {
+			e.printStackTrace();
+			Assert.fail();
+		}
+	}
+
+	@Test
+	public void createOfflineMerchantUpdateBasicInfo() throws InterruptedException {
+		try {
+			setupCreateMerchant(IntegrationMode.OFFLINE);
+			mobData.setBankAccountDetailsDTO(null);
+			mobData.getBusinessInformationDTO().setTdrDetailsDTO(null);
+			mobCommons.updateMerchantDetails(mobData);
+
+			Thread.sleep(2000);verifyMerchantinWallet();
+			verifyMerchantInOPS();
+			verifyBothLobInPayablesWithoutFeeDetails();
+			verifyLobInDEWithoutBankDetails();
+			
+		} catch (Exception e) {
+			e.printStackTrace();
+			Assert.fail();
+		}
+	}
+	
+	@Test
+	public void createOfflineMerchantUpdatePGInfo() throws InterruptedException {
+		try {
+			setupCreateMerchant(IntegrationMode.OFFLINE);
+			mobData.setBankAccountDetailsDTO(null);
+			mobData.getBusinessInformationDTO().setTdrDetailsDTO(null);
+			mobCommons.updateMerchantDetails(mobData);
+			mobCommons.updatePGDetail(mobData);
+
+			Thread.sleep(2000);verifyMerchantinWallet();
+			verifyMerchantInOPS();
+			verifyPaymentMethodsInAggregator("PG,Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifyBothLobInPayablesWithoutFeeDetails();
+			verifyLobInDEWithoutBankDetails();
+			
+		} catch (Exception e) {
+			e.printStackTrace();
+			Assert.fail();
+		}
+	}
+	
+	@Test
+	public void createOfflineMerchantWithBankInfo() throws InterruptedException {
+		try {
+			setupCreateMerchant(IntegrationMode.OFFLINE);
+			mobData.getBusinessInformationDTO().setTdrDetailsDTO(null);
+			mobCommons.updateMerchantDetails(mobData);
+			
+			Thread.sleep(2000);verifyMerchantinWallet();
+			verifyMerchantInOPS();
+			verifyBothLobInPayablesWithoutFeeDetails();
+			verifyBothLobInDE(false);
+			
+		} catch (Exception e) {
+			e.printStackTrace();
+			Assert.fail();
+		}
+	}
+	
+	@Test
+	public void createOfflineMerchantWithFeeInfo() throws InterruptedException {
+		try {
+			setupCreateMerchant(IntegrationMode.OFFLINE);
+			mobCommons.updateMerchantDetails(mobData);
+
+			Thread.sleep(2000);verifyMerchantinWallet();
+			verifyMerchantInOPS();
+			verifyBothLobInPayables();
+			verifyBothLobInDE(false);
+			
+		} catch (Exception e) {
+			e.printStackTrace();
+			Assert.fail();
+		}
+	}
+	
+	//Update Merchant Configuration tests
+	
+	@Test
+	public void createOnlineMerchantUpdateWalletAndPGToWalletAndPG() throws InterruptedException {
+		try {
+			setupCreateMerchant(IntegrationMode.ONLINE);
+			mobCommons.updateMerchantDetails(mobData);
+			mobCommons.updatePGDetail(mobData);
+			
+			Thread.sleep(2000);verifyMerchantinWallet();
+			verifyPaymentMethodsInAggregator("PG,Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifyBothLobInPayables();
+			verifyBothLobInDE(false);
+			
+			setPaymentMethod("Wallet and PG");
+
+			Thread.sleep(2000);verifyMerchantinWallet();
+			verifyPaymentMethodsInAggregator("PG,Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifyBothLobInPayables();
+			verifyBothLobInDE(false);
+			
+		} catch (Exception e) {
+			e.printStackTrace();
+			Assert.fail();
+		}
+	}
+
+	@Test
+	public void createOnlineMerchantUpdateWalletAndPGToWallet() throws InterruptedException {
+		try {
+			setupCreateMerchant(IntegrationMode.ONLINE);
+			mobCommons.updateMerchantDetails(mobData);
+
+			Thread.sleep(2000);verifyMerchantinWallet();
+			verifyPaymentMethodsInAggregator("PG,Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifyBothLobInPayables();
+			verifyBothLobInDE(false);
+			
+			setPaymentMethod("Wallet");
+			Thread.sleep(2000);verifyMerchantinWallet();
+			verifyPaymentMethodsInAggregator("Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifyBothLobInPayables();
+			verifyBothLobInDE(false);
+			
+		} catch (Exception e) {
+			e.printStackTrace();
+			Assert.fail();
+		}
+	}
+	
+	@Test
+	public void createOnlineMerchantUpdateWalletAndPGToAddAndPay() throws InterruptedException {
+		try {
+			setupCreateMerchant(IntegrationMode.ONLINE);
+			mobCommons.updateMerchantDetails(mobData);
+
+			Thread.sleep(2000);verifyMerchantinWallet();
+			verifyPaymentMethodsInAggregator("PG,WALLET");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifyBothLobInPayables();
+			verifyBothLobInDE(false);
+			
+			setPaymentMethod("Add & Pay");
+
+			Thread.sleep(2000);verifyMerchantinWallet();
+			verifyPaymentMethodsInAggregator("PG,WALLET,generalbalance");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifyBothLobInPayables();
+			verifyBothLobInDE(false);
+			
+		} catch (Exception e) {
+			e.printStackTrace();
+			Assert.fail();
+		}
+	}
+	
+	@Test
+	public void createOnlineMerchantUpdateWalletAndPGToLoadCash() throws InterruptedException {
+		try {
+			setupCreateMerchant(IntegrationMode.ONLINE);
+			mobCommons.updateMerchantDetails(mobData);
+
+			verifyPaymentMethodsInAggregator("PG,Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifyBothLobInPayables();
+			verifyBothLobInDE(false);
+			
+			setPaymentMethod("Only Load Cash");
+
+			Thread.sleep(2000);
+			verifyMerchantinWallet();
+			verifyPaymentMethodsInAggregator("PG,WALLET");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifyBothLobInPayables();
+			verifyBothLobInDE(false);
+			
+		} catch (Exception e) {
+			e.printStackTrace();
+			Assert.fail();
+		}
+	}
+	
+	@Test
+	public void createOnlineMerchantUpdateWalletToWalletAndPG() throws InterruptedException {
+		try {
+			setupCreateMerchant(IntegrationMode.ONLINE);
+			mobCommons.updateMerchantDetails(mobData);
+
+			verifyPaymentMethodsInAggregator("PG,Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifyBothLobInPayables();
+			verifyBothLobInDE(false);
+			
+			setPaymentMethod("Wallet");
+
+			verifyPaymentMethodsInAggregator("Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifyBothLobInPayables();
+			verifyBothLobInDE(false);
+			
+			setPaymentMethod("Wallet and PG");
+
+			verifyPaymentMethodsInAggregator("PG,Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifyBothLobInPayables();
+			verifyBothLobInDE(false);
+
+			
+		} catch (ServiceException e) {
+			e.printStackTrace();
+			Assert.fail();
+		}
+	}
+	
+	@Test
+	public void createOnlineMerchantUpdateWalletToAddAndPay() throws InterruptedException {
+		try {
+			setupCreateMerchant(IntegrationMode.ONLINE);
+			mobCommons.updateMerchantDetails(mobData);
+
+			verifyPaymentMethodsInAggregator("PG,Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifyBothLobInPayables();
+			verifyBothLobInDE(false);
+			
+			setPaymentMethod("Wallet");
+
+			verifyPaymentMethodsInAggregator("Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifyBothLobInPayables();
+			verifyBothLobInDE(false);
+			
+			setPaymentMethod("Add & Pay");
+
+			verifyPaymentMethodsInAggregator("PG,WALLET,generalbalance");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifyBothLobInPayables();
+			verifyBothLobInDE(false);
+			
+		} catch (ServiceException e) {
+			e.printStackTrace();
+			Assert.fail();
+		}
+	}
+	
+	//Update Merchant Status Tests
+	@Test
+	public void createOnlineMerchantUpdateMerchantStatusInactiveToActive() throws InterruptedException {
+		try {
+			setupCreateMerchant(IntegrationMode.ONLINE);
+			mobCommons.updateMerchantDetails(mobData);
+			mobCommons.updatePGDetail(mobData);
+			
+			verifyPaymentMethodsInAggregator("PG,Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifyBothLobInPayables();
+			verifyBothLobInDE(false);
+
+			mobUtils.setMerchantStatusActive(mobData);
+			
+			verifyPaymentMethodsInAggregator("PG,Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifyBothLobInPayables();
+			verifyBothLobInDE(true);
+			
+		} catch (ServiceException e) {
+			e.printStackTrace();
+			Assert.fail();
+		}
+	}
+	
+	@Test
+	public void createOnlineMerchantUpdateMerchantStatusActiveToInactive() throws InterruptedException {
+		try {
+			setupCreateMerchant(IntegrationMode.ONLINE);
+			mobCommons.updateMerchantDetails(mobData);
+			mobCommons.updatePGDetail(mobData);
+			
+			mobUtils.setMerchantStatusActive(mobData);
+			
+			verifyPaymentMethodsInAggregator("PG,Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifyBothLobInPayables();
+			verifyBothLobInDE(true);
+
+			mobData.getotherDetailsDTO().setMerchantStatus(MerchantStatus.INACTIVE.getMerchantStatus());
+			UpdateMerchantStatusResponse updateMerchantStatusResponse = mobCommons.updateMerchantStatus(mobData);
+			Assert.assertNotNull(updateMerchantStatusResponse);
+			
+			verifyPaymentMethodsInAggregator("PG,Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifyBothLobInPayables();
+			verifyBothLobInDE(false);
+			
+		} catch (ServiceException e) {
+			e.printStackTrace();
+			Assert.fail();
+		}
+	}
+	
+	//verify isSettlementEnabled=FALSE in DE when bankStatus=FALSE
+	@Test
+	public void createOnlineMerchantUpdateBankStatusActiveToInactive() throws InterruptedException {
+		try {
+			setupCreateMerchant(IntegrationMode.ONLINE);
+			mobCommons.updateMerchantDetails(mobData);
+			mobCommons.updatePGDetail(mobData);
+			
+			mobUtils.setMerchantStatusActive(mobData);
+			
+			verifyPaymentMethodsInAggregator("PG,Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifyBothLobInPayables();
+			verifyBothLobInDE(true);
+
+			mobData.getBankAccountDetailsDTO().setBankStatus(BankStatus.UNVERIFIED.toString());
+			UpdateMerchantStatusResponse updateMerchantStatusResponse = mobCommons.updateMerchantStatus(mobData);
+			Assert.assertNotNull(updateMerchantStatusResponse);
+			
+			verifyPaymentMethodsInAggregator("PG,Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifyBothLobInPayables();
+			verifyBothLobInDE(false);
+			
+		} catch (ServiceException e) {
+			e.printStackTrace();
+			Assert.fail();
+		}
+	}
+	
+	//Update normal info
+	
+	@Test
+	public void createOnlineMerchantAndUpdateNormalInfo() throws InterruptedException {
+		try {
+			setupCreateMerchant(IntegrationMode.ONLINE);
+			mobCommons.updateMerchantDetails(mobData);
+			mobCommons.updatePGDetail(mobData);
+
+			verifyPaymentMethodsInAggregator("PG,Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifyBothLobInPayables();
+			verifyBothLobInDE(false);
+
+			mobData.getBusinessInformationDTO().setMerchantName("abc");
+			mobCommons.updateMerchantDetails(mobData);
+			
+			verifyMerchantNameInAggregator();
+			verifyPaymentMethodsInAggregator("PG,Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifyBothLobInPayables();
+			verifyBothLobInDE(false);
+
+		} catch (ServiceException e) {
+			e.printStackTrace();
+			Assert.fail();
+		}
+	}
+	
+	@Test
+	public void createOnlineMerchantUpdateBankInfo() throws InterruptedException {
+		try {
+			setupCreateMerchant(IntegrationMode.ONLINE);
+			mobData.setBankAccountDetailsDTO(null);
+			mobData.getBusinessInformationDTO().setTdrDetailsDTO(null);
+			mobCommons.updateMerchantDetails(mobData);
+			mobCommons.updatePGDetail(mobData);
+			
+			verifyPaymentMethodsInAggregator("PG,Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifyBothLobInPayablesWithoutFeeDetails();
+			verifyLobInDEWithoutBankDetails();
+			
+			mobData.setBankAccountDetailsDTO(new BankAccountDetailsDTO());
+			mobData.setBankAccountDetailsDTO();			
+			mobCommons.updateMerchantDetails(mobData);
+
+			verifyPaymentMethodsInAggregator("PG,Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifyBothLobInPayablesWithoutFeeDetails();
+			verifyBothLobInDE(false);
+			
+		} catch (ServiceException e) {
+			e.printStackTrace();
+			Assert.fail();
+		}
+	}
+	
+	@Test
+	public void createOnlineMerchantUpdateFeeInfo() throws InterruptedException {
+		try {
+			setupCreateMerchant(IntegrationMode.ONLINE);
+			mobData.getBusinessInformationDTO().setTdrDetailsDTO(null);
+			mobCommons.updateMerchantDetails(mobData);
+			mobCommons.updatePGDetail(mobData);
+
+			verifyPaymentMethodsInAggregator("PG,Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifyBothLobInPayablesWithoutFeeDetails();
+			verifyBothLobInDE(false);
+			
+			mobData.getBusinessInformationDTO().setTdrDetailsDTO(new TDRDetailsDTO());
+			mobData.setTDRDetails();
+			mobData.setBusinessInformationDTO();
+			mobCommons.updateMerchantDetails(mobData);
+
+			verifyPaymentMethodsInAggregator("PG,Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifyBothLobInPayables();
+			verifyBothLobInDE(false);
+			
+		} catch (ServiceException e) {
+			e.printStackTrace();
+			Assert.fail();
+		}
+	}
+	
+	@Test
+	public void createOfflineMerchantUpdateBankInfo() throws InterruptedException {
+		try {
+			setupCreateMerchant(IntegrationMode.OFFLINE);
+			mobData.setBankAccountDetailsDTO(null);
+			mobData.getBusinessInformationDTO().setTdrDetailsDTO(null);
+			mobCommons.updateMerchantDetails(mobData);
+			mobCommons.updatePGDetail(mobData);
+			
+			verifyMerchantInOPS();
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifyPaymentMethodsInAggregator("PG,Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifySingleLobInPayablesWithoutFeeDetails();
+			verifyLobInDEWithoutBankDetails();
+			
+			mobData.setBankAccountDetailsDTO(new BankAccountDetailsDTO());
+			mobData.setBankAccountDetailsDTO();			
+			mobCommons.updateMerchantDetails(mobData);
+			
+			verifyMerchantInOPS();
+			verifyPaymentMethodsInAggregator("PG,Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifySingleLobInPayablesWithoutFeeDetails();
+			verifySingleLobInDE(false);
+			
+		} catch (Exception e) {
+			e.printStackTrace();
+			Assert.fail();
+		}
+	}
+	
+	@Test
+	public void createOfflineMerchantUpdateFeeInfo() throws InterruptedException {
+		try {
+			setupCreateMerchant(IntegrationMode.OFFLINE);
+			mobData.getBusinessInformationDTO().setTdrDetailsDTO(null);
+			mobCommons.updateMerchantDetails(mobData);
+			mobCommons.updatePGDetail(mobData);
+
+			verifyMerchantInOPS();
+			verifyPaymentMethodsInAggregator("PG,Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifySingleLobInPayablesWithoutFeeDetails();
+			verifySingleLobInDE(false);
+			
+			mobData.getBusinessInformationDTO().setTdrDetailsDTO(new TDRDetailsDTO());
+			mobData.setTDRDetails();
+			mobData.setBusinessInformationDTO();
+			mobCommons.updateMerchantDetails(mobData);
+
+			verifyMerchantInOPS();
+			verifyPaymentMethodsInAggregator("PG,Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifySingleLobInPayables();
+			verifySingleLobInDE(false);
+			
+		} catch (Exception e) {
+			e.printStackTrace();
+			Assert.fail();
+		}
+	}
+	
+	//Default payment method wallet
+	
+	@Test
+	public void createOnlineMerchantUpdateWalletToWalletAndPG1() throws InterruptedException {
+		try {
+			setupCreateMerchant(IntegrationMode.ONLINE);
+			mobCommons.updateMerchantDetails(mobData);
+			mobCommons.updatePGDetail(mobData);
+			
+			verifyPaymentMethodsInAggregator("Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifySingleLobInPayables();
+			verifySingleLobInDE(false);
+			
+			setPaymentMethod("Wallet and PG");
+
+			verifyPaymentMethodsInAggregator("PG,Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifyBothLobInPayables();
+			verifyBothLobInDE(false);
+			
+		} catch (ServiceException e) {
+			e.printStackTrace();
+			Assert.fail();
+		}
+	}
+	
+	@Test
+	public void createOnlineMerchantUpdateWalletToWallet2() throws InterruptedException {
+		try {
+			setupCreateMerchant(IntegrationMode.ONLINE);
+			mobCommons.updateMerchantDetails(mobData);
+			mobCommons.updatePGDetail(mobData);
+			
+			verifyPaymentMethodsInAggregator("Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifySingleLobInPayables();
+			verifySingleLobInDE(false);
+			
+			setPaymentMethod("Wallet");
+
+			verifyPaymentMethodsInAggregator("Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifySingleLobInPayables();
+			verifySingleLobInDE(false);
+			
+		} catch (ServiceException e) {
+			e.printStackTrace();
+			Assert.fail();
+		}
+	}
+	
+	@Test
+	public void createOnlineMerchantUpdateWalletToAddAndPay3() throws InterruptedException {
+		try {
+			setupCreateMerchant(IntegrationMode.ONLINE);
+			mobCommons.updateMerchantDetails(mobData);
+			mobCommons.updatePGDetail(mobData);
+			
+			verifyPaymentMethodsInAggregator("Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifySingleLobInPayables();
+			verifySingleLobInDE(false);
+			
+			setPaymentMethod("Add & Pay");
+
+			verifyPaymentMethodsInAggregator("PG,Wallet,GENERALBALANCE");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifySingleLobInPayables();
+			verifySingleLobInDE(false);
+			
+		} catch (ServiceException e) {
+			e.printStackTrace();
+			Assert.fail();
+		}
+	}
+	
+	@Test
+	public void createOnlineMerchantUpdateWalletToLoadCash() throws InterruptedException {
+		try {
+			setupCreateMerchant(IntegrationMode.ONLINE);
+			mobCommons.updateMerchantDetails(mobData);
+			mobCommons.updatePGDetail(mobData);
+			
+			verifyPaymentMethodsInAggregator("Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifySingleLobInPayables();
+			verifySingleLobInDE(false);
+			
+			setPaymentMethod("Only Load Cash");
+
+			verifyPaymentMethodsInAggregator("PG,Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifySingleLobInPayables();
+			verifySingleLobInDE(false);
+			
+		} catch (ServiceException e) {
+			e.printStackTrace();
+			Assert.fail();
+		}
+	}
+	
+	
+	@Test
+	public void createOnlineMerchantUpdateWalletToWalletAndPGUpdateFeeDetails() throws InterruptedException {
+		try {
+			setupCreateMerchant(IntegrationMode.ONLINE);
+			mobData.getBusinessInformationDTO().setTdrDetailsDTO(null);
+			mobCommons.updateMerchantDetails(mobData);
+			mobCommons.updatePGDetail(mobData);
+			
+			verifyPaymentMethodsInAggregator("Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifySingleLobInPayablesWithoutFeeDetails();
+			verifySingleLobInDE(false);
+			
+			setPaymentMethod("Wallet and PG");
+
+			verifyPaymentMethodsInAggregator("PG,Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifyBothLobInPayablesWithoutFeeDetails();
+			verifyBothLobInDE(false);
+			
+			mobData.getBusinessInformationDTO().setTdrDetailsDTO(new TDRDetailsDTO());
+			mobData.setTDRDetails();
+			mobData.setBusinessInformationDTO();
+			mobCommons.updateMerchantDetails(mobData);
+
+			verifyPaymentMethodsInAggregator("PG,Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifyBothLobInPayables();
+			verifyBothLobInDE(false);
+
+		} catch (ServiceException e) {
+			e.printStackTrace();
+			Assert.fail();
+		}
+	}
+	
+	@Test
+	public void createOnlineMerchantUpdateWalletToWalletAndPGUpdateBankDetails() throws InterruptedException {
+		try {
+			setupCreateMerchant(IntegrationMode.ONLINE);
+			mobData.setBankAccountDetailsDTO(null);
+			mobCommons.updateMerchantDetails(mobData);
+			mobCommons.updatePGDetail(mobData);
+			
+			verifyPaymentMethodsInAggregator("Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifySingleLobInPayables();
+			verifyLobInDEWithoutBankDetails();
+			
+			setPaymentMethod("Wallet and PG");
+
+			verifyPaymentMethodsInAggregator("PG,Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifyBothLobInPayables();
+			verifyLobInDEWithoutBankDetails();
+			
+			mobData.setBankAccountDetailsDTO(new BankAccountDetailsDTO());
+			mobData.setBankAccountDetailsDTO();
+			mobCommons.updateMerchantDetails(mobData);
+
+			verifyPaymentMethodsInAggregator("PG,Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifyBothLobInPayables();
+			verifyBothLobInDE(false);
+
+		} catch (ServiceException e) {
+			e.printStackTrace();
+			Assert.fail();
+		}
+	}
+	
+	
+	//Other tests
+	@Test
+	public void createOnlineMerchantUpdateFeeInfoTwice() throws InterruptedException, ParseException {
+		try {
+			setupCreateMerchant(IntegrationMode.ONLINE);
+			mobCommons.updateMerchantDetails(mobData);
+			mobCommons.updatePGDetail(mobData);
+
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifyBothLobInPayables();
+			verifyBothLobInDE(false);
+			
+			mobData.getBusinessInformationDTO().getTdrDetailsDTO().setFixedFeeValue("2.00");
+			mobData.getBusinessInformationDTO().getTdrDetailsDTO().setMerchantFeeValue("2.00");
+			Date dt = new Date();
+			Calendar c = Calendar.getInstance(); 
+			c.setTime(dt); 
+			c.add(Calendar.DATE, 1);
+			dt = c.getTime();
+
+			mobData.getBusinessInformationDTO().getTdrDetailsDTO().setValidFrom(tdgen.parseToDesiredDateFormat(dt.toString(), "EEE MMM dd hh:mm:ss zzz yyyy","dd-MM-yyyy"));
+			UpdateMerchantDetailsResponse updateMerchantDetailsResponse =mobCommons.updateMerchantDetails(mobData);
+			
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifyBothLobInPayables();
+			verifyBothLobInDE(false);
+			
+		} catch (Exception e) {
+			e.printStackTrace();
+			Assert.fail();
+		}
+	}
+	
+	@Test
+	public void createOnlineMerchantUpdateBankInfoTwice() throws InterruptedException {
+		try {
+			setupCreateMerchant(IntegrationMode.ONLINE);
+			mobCommons.updateMerchantDetails(mobData);
+			mobCommons.updatePGDetail(mobData);
+
+			verifyPaymentMethodsInAggregator("PG,Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifyBothLobInPayables();
+			verifyBothLobInDE(false);
+			
+			mobData.getBankAccountDetailsDTO().setBankName("SBI Bank");
+			mobData.getBankAccountDetailsDTO().setAccountHolderName("Test User");
+			mobData.getBankAccountDetailsDTO().setAccountNumber("1010010100");
+			mobData.getBankAccountDetailsDTO().setIfsccode("SCBL8429348");
+			mobData.getBankAccountDetailsDTO().setDisburseDifferencePeriod(5);
+			mobCommons.updateMerchantDetails(mobData);
+			
+			verifyPaymentMethodsInAggregator("PG,Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifyBothLobInPayables();
+			verifyBothLobInDE(false);
+			
+		} catch (ServiceException e) {
+			e.printStackTrace();
+			Assert.fail();
+		}
+	}
+	
+	//Complex test
+	/*
+	FEE:
+		*set payment method---if second account empty----copy to it
+						  ---if second account filled----remain as it
+		update fee details---do to all accounts
+
+		BANK:
+		*set payment method---copy to all accounts
+		update bank details---do to only one accounts
+	*/
+	
+	@Test
+	public void createOnlineMerchantInsertBankInfoOfWalletInBothAccounts() throws InterruptedException {
+		try {
+			setupCreateMerchant(IntegrationMode.ONLINE);
+			mobData.setBankAccountDetailsDTO(null);
+			mobCommons.updateMerchantDetails(mobData);
+			mobCommons.updatePGDetail(mobData);
+
+			verifyPaymentMethodsInAggregator("PG,Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifyBothLobInPayables();
+			verifyLobInDEWithoutBankDetails();
+			
+			setPaymentMethod("Wallet");
+			
+			mobData.setBankAccountDetailsDTO(new BankAccountDetailsDTO());
+			mobData.setBankAccountDetailsDTO();			
+			mobCommons.updateMerchantDetails(mobData);
+
+			verifyPaymentMethodsInAggregator("Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifyBothLobInPayables();
+			verifySingleLobInDE(false);
+			//verify for pg account with no details
+			
+			setPaymentMethod("Wallet and PG");
+
+			verifyPaymentMethodsInAggregator("PG,Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifyBothLobInPayables();
+			verifyBothLobInDE(false);
+			
+		} catch (ServiceException e) {
+			e.printStackTrace();
+			Assert.fail();
+		}
+	}
+	
+	@Test
+	public void createOnlineMerchantUpdateBankInfoOfWalletInBothAccounts() throws InterruptedException {
+		try {
+			setupCreateMerchant(IntegrationMode.ONLINE);
+			setPaymentMethod("Wallet and PG");
+			mobCommons.updateMerchantDetails(mobData);
+			mobCommons.updatePGDetail(mobData);
+
+			verifyPaymentMethodsInAggregator("PG,Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifyBothLobInPayables();
+			verifyBothLobInDE(false);
+			
+			setPaymentMethod("Wallet");
+			
+			mobData.getBankAccountDetailsDTO().setBankName("SBI Bank");
+			mobData.getBankAccountDetailsDTO().setAccountHolderName("Test User");
+			mobData.getBankAccountDetailsDTO().setAccountNumber("1010010100");
+			mobData.getBankAccountDetailsDTO().setIfsccode("SCBL8429348");
+			mobData.getBankAccountDetailsDTO().setDisburseDifferencePeriod(5);
+			mobCommons.updateMerchantDetails(mobData);
+			
+			verifyPaymentMethodsInAggregator("Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifyBothLobInPayables();
+			//verifySingleLobInDE(false);
+			//verify for pg account with old details
+			
+			setPaymentMethod("Wallet and PG");
+
+			verifyPaymentMethodsInAggregator("PG,Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifyBothLobInPayables();
+			verifyBothLobInDE(false);
+			
+		} catch (ServiceException e) {
+			e.printStackTrace();
+			Assert.fail();
+		}
+	}
+	
+	@Test
+	public void createOnlineMerchantInsertFeeInfoOfWalletInBothAccounts() throws InterruptedException {
+		try {
+			setupCreateMerchant(IntegrationMode.ONLINE);
+			setPaymentMethod("Wallet and PG");
+			mobData.getBusinessInformationDTO().setTdrDetailsDTO(null);
+			mobCommons.updateMerchantDetails(mobData);
+			mobCommons.updatePGDetail(mobData);
+
+			verifyPaymentMethodsInAggregator("PG,Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifyBothLobInPayablesWithoutFeeDetails();
+			verifyBothLobInDE(false);
+			
+			setPaymentMethod("Wallet");
+			
+			mobData.getBusinessInformationDTO().setTdrDetailsDTO(new TDRDetailsDTO());
+			mobData.setTDRDetails();
+			mobData.setBusinessInformationDTO();
+			mobCommons.updateMerchantDetails(mobData);
+			
+			verifyPaymentMethodsInAggregator("Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifyBothLobInPayables();
+			verifyBothLobInDE(false);
+			
+			setPaymentMethod("Wallet and PG");
+
+			verifyPaymentMethodsInAggregator("PG,Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifyBothLobInPayables();
+			verifyBothLobInDE(false);
+			
+		} catch (Exception e) {
+			e.printStackTrace();
+			Assert.fail();
+		}
+	}
+	
+	@Test
+	public void createOnlineMerchantUpdateFeeInfoOfWalletInBothAccounts() throws InterruptedException {
+		try {
+			setupCreateMerchant(IntegrationMode.ONLINE);
+			setPaymentMethod("Wallet and PG");
+			mobCommons.updateMerchantDetails(mobData);
+			mobCommons.updatePGDetail(mobData);
+
+			verifyPaymentMethodsInAggregator("PG,Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifyBothLobInPayables();
+			verifyBothLobInDE(false);
+			
+			setPaymentMethod("Wallet");
+			
+			mobData.getBusinessInformationDTO().getTdrDetailsDTO().setFixedFeeValue("2.00");
+			mobData.getBusinessInformationDTO().getTdrDetailsDTO().setMerchantFeeValue("2.00");
+			Date dt = new Date();
+			Calendar c = Calendar.getInstance(); 
+			c.setTime(dt); 
+			c.add(Calendar.DATE, 1);
+			dt = c.getTime();
+			mobData.getBusinessInformationDTO().getTdrDetailsDTO().setValidFrom(tdgen.parseToDesiredDateFormat(dt.toString(), "EEE MMM dd hh:mm:ss zzz yyyy","dd-MM-yyyy"));
+
+			mobCommons.updateMerchantDetails(mobData);
+			
+			verifyPaymentMethodsInAggregator("Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifyBothLobInPayables();
+			verifyBothLobInDE(false);
+			
+			setPaymentMethod("Wallet and PG");
+
+			verifyPaymentMethodsInAggregator("PG,Wallet");
+			verifyTransactionAndRefundActiveInAggregator("1", "1");
+			verifyBothLobInAggregatorWithFlagDisabled();
+			verifyBothLobInPayables();
+			verifyBothLobInDE(false);
+			
+		} catch (Exception e) {
+			e.printStackTrace();
+			Assert.fail();
+		}
+	}
+}
+

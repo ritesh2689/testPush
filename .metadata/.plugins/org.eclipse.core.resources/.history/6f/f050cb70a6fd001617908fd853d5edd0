@@ -1,0 +1,22 @@
+import org.openqa.selenium.By;
+import org.openqa.selenium.WebDriver;
+import org.openqa.selenium.WebElement;
+import org.openqa.selenium.chrome.ChromeDriver;
+
+public class AlertDemo {
+	public static void main(String args[]) {
+		System.setProperty("webdriver.chrome.driver", "E://chromedriver.exe");
+		WebDriver driver = new ChromeDriver();
+		driver.get("http://demo.guru99.com/V4/");
+
+		WebElement userID = driver.findElement(By
+				.xpath("//*[@type='text' and @name='uid']"));
+		userID.clear();
+		userID.sendKeys("mngr68159");
+
+		WebElement password = driver.findElement(By
+				.xpath("//*[@type='password' and @name='password']"));
+		password.clear();
+		password.sendKeys("ujEtude");
+	}
+}

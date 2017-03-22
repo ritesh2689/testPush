@@ -1,0 +1,17 @@
+import org.openqa.selenium.WebDriver;
+import org.openqa.selenium.firefox.FirefoxDriver;
+
+public class firstDemoTest {
+
+	public static void main(String args[]) {
+		WebDriver driver = new FirefoxDriver();
+		String expectedTitle = "";
+		String baseUrl = "";
+
+		driver.get(baseUrl);
+		driver.manage().window().maximize();
+		String actualTitle = driver.getTitle();
+		System.out.println(actualTitle);
+
+	}
+}

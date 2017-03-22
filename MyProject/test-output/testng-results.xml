@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testng-results skipped="0" failed="0" ignored="0" total="1" passed="1">
+  <reporter-output>
+  </reporter-output>
+  <suite name="Default suite" duration-ms="43730" started-at="2017-03-14T11:53:46Z" finished-at="2017-03-14T11:54:30Z">
+    <groups>
+    </groups>
+    <test name="Default test" duration-ms="43730" started-at="2017-03-14T11:53:46Z" finished-at="2017-03-14T11:54:30Z">
+      <class name="TestNGPackage.IFrame">
+        <test-method status="PASS" signature="setup()[pri:0, instance:TestNGPackage.IFrame@1753acfe]" name="setup" is-config="true" duration-ms="43318" started-at="2017-03-14T17:23:46Z" finished-at="2017-03-14T17:24:30Z">
+          <reporter-output>
+          </reporter-output>
+        </test-method> <!-- setup -->
+        <test-method status="PASS" signature="scrollScreen()[pri:0, instance:TestNGPackage.IFrame@1753acfe]" name="scrollScreen" duration-ms="383" started-at="2017-03-14T17:24:30Z" finished-at="2017-03-14T17:24:30Z">
+          <reporter-output>
+          </reporter-output>
+        </test-method> <!-- scrollScreen -->
+      </class> <!-- TestNGPackage.IFrame -->
+    </test> <!-- Default test -->
+  </suite> <!-- Default suite -->
+</testng-results>

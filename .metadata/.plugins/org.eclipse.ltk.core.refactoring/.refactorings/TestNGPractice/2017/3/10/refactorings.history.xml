@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<session version="1.0">
+<refactoring comment="Move element &apos;ParallelExecution.java&apos; to &apos;TestNGPackage.DataProviderClass.java&apos;&#x0D;&#x0A;- Original project: &apos;TestNGPractice&apos;&#x0D;&#x0A;- Destination element: &apos;TestNGPackage.DataProviderClass.java&apos;&#x0D;&#x0A;- Original element: &apos;ParallelExecution.java&apos;&#x0D;&#x0A;- Update references to refactored element" description="Move compilation unit" destination="/src&lt;TestNGPackage{DataProviderClass.java" element1="/src&lt;{ParallelExecution.java" files="0" flags="589830" folders="0" id="org.eclipse.jdt.ui.move" policy="org.eclipse.jdt.ui.moveResources" qualified="false" references="true" stamp="1488692567667" units="1" version="1.0"/>
+</session>
